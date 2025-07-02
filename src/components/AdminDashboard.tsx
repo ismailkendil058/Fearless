@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import WilayaManager from "./WilayaManager";
 import CouponManager from "./CouponManager";
+import { Trash2 } from "lucide-react";
 
 interface Order {
   id: string;
@@ -132,6 +133,36 @@ const AdminDashboard = ({ onBack }: AdminDashboardProps) => {
     }
   };
 
+  const handleDeleteOrder = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this order?")) return;
+    try {
+      const { error } = await supabase.from('orders').delete().eq('id', id);
+      if (error) throw error;
+      toast({
+        title: "Order Deleted",
+        description: "The order has been deleted successfully.",
+      });
+      loadOrders();
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete order",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Calculate adjusted order value for each order
+  const getOrderValue = (order) => {
+    if (order.total_price >= 3000) {
+      return order.total_price - order.delivery_fee;
+    }
+    return order.total_price;
+  };
+  // Calculate total revenue and average order value using adjusted values
+  const totalRevenue = orders.reduce((sum, order) => sum + getOrderValue(order), 0);
+  const avgOrderValue = orders.length > 0 ? Math.round(totalRevenue / orders.length) : 0;
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
@@ -208,7 +239,7 @@ const AdminDashboard = ({ onBack }: AdminDashboardProps) => {
                   <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">DA {orders.reduce((sum, order) => sum + order.total_price, 0).toLocaleString()}</div>
+                  <div className="text-2xl font-bold">DA {totalRevenue.toLocaleString()}</div>
                 </CardContent>
               </Card>
               
@@ -217,7 +248,7 @@ const AdminDashboard = ({ onBack }: AdminDashboardProps) => {
                   <CardTitle className="text-sm font-medium">Avg Order Value</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">DA {orders.length > 0 ? Math.round(orders.reduce((sum, order) => sum + order.total_price, 0) / orders.length).toLocaleString() : 0}</div>
+                  <div className="text-2xl font-bold">DA {avgOrderValue.toLocaleString()}</div>
                 </CardContent>
               </Card>
               
@@ -282,6 +313,7 @@ const AdminDashboard = ({ onBack }: AdminDashboardProps) => {
                         <TableHead>Total</TableHead>
                         <TableHead>Coupon</TableHead>
                         <TableHead>Date</TableHead>
+                        <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -307,6 +339,11 @@ const AdminDashboard = ({ onBack }: AdminDashboardProps) => {
                             )}
                           </TableCell>
                           <TableCell>{new Date(order.created_at).toLocaleDateString()}</TableCell>
+                          <TableCell>
+                            <Button variant="destructive" onClick={() => handleDeleteOrder(order.id)}>
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

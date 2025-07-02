@@ -26,6 +26,10 @@ const PurchaseForm = () => {
   const { t } = useTranslation();
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [quantity, setQuantity] = useState(1);
+  const [supabaseError, setSupabaseError] = useState<string | null>(null);
+  const [couponStatus, setCouponStatus] = useState<string | null>(null);
+  const [validatingCoupon, setValidatingCoupon] = useState(false);
+  const [couponValidated, setCouponValidated] = useState(false);
 
   useEffect(() => {
     const fetchWilayaFees = async () => {
@@ -58,8 +62,69 @@ const PurchaseForm = () => {
     return newErrors;
   };
 
+  const validateCoupon = async () => {
+    setValidatingCoupon(true);
+    setCouponStatus(null);
+    setDiscount(0);
+    setCouponValidated(false);
+    if (!coupon.trim()) {
+      setCouponStatus('Please enter a coupon code.');
+      setValidatingCoupon(false);
+      return;
+    }
+    const { data, error } = await supabase
+      .from('coupons')
+      .select('*')
+      .eq('code', coupon.trim().toUpperCase())
+      .eq('is_active', true)
+      .maybeSingle();
+    if (error || !data) {
+      setCouponStatus('Invalid or expired coupon.');
+      setValidatingCoupon(false);
+      setDiscount(0);
+      setCouponValidated(false);
+      return;
+    }
+    // Check usage limit
+    if (data.usage_limit && data.used_count >= data.usage_limit) {
+      setCouponStatus('This coupon has reached its usage limit.');
+      setValidatingCoupon(false);
+      setDiscount(0);
+      setCouponValidated(false);
+      return;
+    }
+    // Check expiry
+    if (data.expires_at && new Date(data.expires_at) < new Date()) {
+      setCouponStatus('This coupon has expired.');
+      setValidatingCoupon(false);
+      setDiscount(0);
+      setCouponValidated(false);
+      return;
+    }
+    // Apply discount
+    let discountValue = 0;
+    if (data.discount_percentage > 0) {
+      discountValue = Math.round((PRODUCT_PRICE * quantity) * (data.discount_percentage / 100));
+    } else if (data.discount_amount > 0) {
+      discountValue = data.discount_amount;
+    }
+    setDiscount(discountValue);
+    setCouponStatus(`Coupon applied! Discount: ${discountValue.toLocaleString()} DA`);
+    setCouponValidated(true);
+    setValidatingCoupon(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSupabaseError(null); // Reset error on new submit
+    // Always re-validate coupon on submit if not already validated
+    if (coupon && !couponValidated) {
+      await validateCoupon();
+      if (!couponValidated) {
+        setIsSubmitting(false);
+        return;
+      }
+    }
     const validationErrors = validate();
     setErrors(validationErrors);
     if (Object.keys(validationErrors).length > 0) {
@@ -85,6 +150,18 @@ const PurchaseForm = () => {
       const finalTotal = PRODUCT_PRICE * quantity + selectedFee;
 
       // Insert order into database
+      console.log('Submitting order:', {
+        full_name: fullName,
+        phone: phone,
+        wilaya: wilaya,
+        delivery_method: deliveryMethod,
+        address: deliveryMethod === 'home' ? address : null,
+        coupon_code: coupon || null,
+        delivery_fee: selectedFee,
+        discount: discount,
+        total_price: finalTotal,
+        quantity: quantity
+      });
       const { error } = await supabase
         .from('orders')
         .insert({
@@ -99,8 +176,10 @@ const PurchaseForm = () => {
           total_price: finalTotal,
           quantity: quantity
         });
+      console.log('Supabase insert result:', error);
 
       if (error) {
+        setSupabaseError(error.message || 'حدث خطأ في حفظ الطلب. يرجى المحاولة مرة أخرى.');
         console.error('Error saving order:', error);
         toast({
           title: "خطأ",
@@ -128,7 +207,8 @@ const PurchaseForm = () => {
 
       window.location.href = '/admin';
 
-    } catch (error) {
+    } catch (error: any) {
+      setSupabaseError(error.message || 'حدث خطأ غير متوقع');
       console.error('Error:', error);
       toast({
         title: "خطأ",
@@ -251,14 +331,27 @@ const PurchaseForm = () => {
           <label htmlFor="coupon" className="block text-gray-700 text-sm font-semibold mb-1">
             Coupon Code (optional) <span className="font-arabic text-base">| كود التخفيض</span>
           </label>
-          <input
-            type="text"
-            id="coupon"
-            placeholder="e.g. SAVE20"
-            className="border border-gray-300 rounded-lg w-full py-3 px-4 text-gray-800 focus:outline-none focus:ring-2 focus:ring-black/60 focus:border-black transition shadow-sm focus:shadow-lg"
-            value={coupon}
-            onChange={(e) => setCoupon(e.target.value)}
-          />
+          <div className="flex gap-2">
+            <input
+              type="text"
+              id="coupon"
+              placeholder="e.g. SAVE20"
+              className="border border-gray-300 rounded-lg w-full py-3 px-4 text-gray-800 focus:outline-none focus:ring-2 focus:ring-black/60 focus:border-black transition shadow-sm focus:shadow-lg"
+              value={coupon}
+              onChange={(e) => { setCoupon(e.target.value); setCouponStatus(null); setCouponValidated(false); setDiscount(0); }}
+            />
+            <button
+              type="button"
+              onClick={validateCoupon}
+              className="bg-black text-white px-4 py-2 rounded-md hover:bg-gray-800 transition disabled:opacity-60"
+              disabled={validatingCoupon || !coupon.trim()}
+            >
+              {validatingCoupon ? 'Validating...' : 'Validate'}
+            </button>
+          </div>
+          {couponStatus && (
+            <div className={`mt-2 text-sm font-semibold ${couponStatus.startsWith('Coupon applied') ? 'text-green-600' : 'text-red-600'}`}>{couponStatus}</div>
+          )}
         </div>
 
         <div>
@@ -285,12 +378,16 @@ const PurchaseForm = () => {
             <span>{(PRODUCT_PRICE * quantity).toLocaleString()} DA</span>
           </div>
           <div className="flex justify-between">
+            <span>Discount</span>
+            <span>-{discount.toLocaleString()} DA</span>
+          </div>
+          <div className="flex justify-between">
             <span>Delivery fee</span>
             <span>{deliveryMethod === 'home' ? effectiveHomeFee.toLocaleString() : effectiveBureauFee.toLocaleString()} DA</span>
           </div>
           <div className="flex justify-between font-bold text-lg">
             <span>Total price</span>
-            <span>{((PRODUCT_PRICE * quantity) + (deliveryMethod === 'home' ? effectiveHomeFee : effectiveBureauFee)).toLocaleString()} DA</span>
+            <span>{((PRODUCT_PRICE * quantity) - discount + (deliveryMethod === 'home' ? effectiveHomeFee : effectiveBureauFee)).toLocaleString()} DA</span>
           </div>
         </div>
 
@@ -303,6 +400,9 @@ const PurchaseForm = () => {
             {isSubmitting ? t('sending_label') || 'Sending...' : 'Purchase'}
           </span>
         </button>
+        {supabaseError && (
+          <div className="text-red-600 text-center mb-2 font-semibold">{supabaseError}</div>
+        )}
         <div className="text-center mt-2">
           <span className="inline-block bg-black text-white px-4 py-2 rounded-full font-semibold text-sm mt-2 font-arabic">الدفع عند الاستلام فقط</span>
         </div>
